@@ -1,0 +1,93 @@
+:root{
+  --maroon-start: #523044;
+  --maroon-end: #c91548;
+  --accent: #c91548;
+  --muted: #6b7280;
+  --nav-height: 64px;
+}
+
+/* reset / base */
+*{box-sizing:border-box}
+body{margin:0;font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#111827; background:#fff;}
+.app-root{min-height:100vh}
+
+/* NAVBAR */
+.site-nav{position:sticky;top:0;z-index:40;background:#fff;box-shadow:0 1px 0 rgba(0,0,0,0.06);}
+.nav-inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;height:var(--nav-height);gap:12px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
+.brand-logo{width:36px;height:36px;border-radius:6px;background:linear-gradient(135deg,var(--maroon-start),var(--maroon-end));display:inline-block}
+.brand-text{display:flex;flex-direction:column;line-height:1}
+.brand-sm{font-weight:700;color:var(--accent);font-size:14px}
+.brand-title{font-weight:700;color:#111;font-size:14px}
+
+/* Nav right */
+.nav-right{display:flex;align-items:center;gap:12px}
+.nav-link{color:var(--accent);text-decoration:none;font-weight:600;padding:8px;border-radius:8px}
+.nav-link:focus{outline:3px solid rgba(201,21,72,0.15);outline-offset:2px}
+
+/* Toggle for mobile */
+.nav-toggle{display:none;background:transparent;border:0;padding:6px;border-radius:8px;cursor:pointer}
+.nav-toggle:focus{outline:3px solid rgba(201,21,72,0.15);outline-offset:2px}
+
+/* HERO */
+.hero{background:linear-gradient(90deg,var(--maroon-start),var(--maroon-end));color:white;padding:48px 0 56px}
+.hero-inner{max-width:1100px;margin:0 auto;padding:40px 20px;min-height:240px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}
+.hero-title{font-size:48px;margin:0 0 12px;font-weight:800;letter-spacing:-1px}
+.hero-sub{margin:0;color:rgba(255,255,255,0.9);font-size:18px}
+
+/* Main content spacing */
+.main-content{max-width:1100px;margin:24px auto;padding:0 20px}
+
+/* Responsive adjustments for nav/hero */
+@media (max-width: 768px){
+  .hero-inner{min-height:160px;padding:28px 16px}
+  .hero-title{font-size:28px}
+  .brand-sm,.brand-title{font-size:13px}
+  .nav-toggle{display:inline-flex}
+  .nav-right{position:fixed;top:var(--nav-height);right:12px;background:rgba(255,255,255,0.98);padding:10px;border-radius:8px;box-shadow:0 6px 18px rgba(16,24,40,0.08);display:none;flex-direction:column}
+  .nav-right.open{display:flex}
+  .nav-link{padding:8px 12px}
+}
+
+/* SCHEDULER styles merged */
+:root { --bg: #f6f7fb; --card: #ffffff; --muted: #6b7280; }
+* { box-sizing: border-box; }
+.app-root { padding: 0; max-width: 1100px; margin: 0 auto; }
+
+/* card and layout */
+.card { background: var(--card); border-radius: 10px; padding: 18px; box-shadow: 0 4px 14px rgba(16,24,40,0.06); }
+.header { margin-bottom: 18px; }
+.controls { display:flex; gap: 12px; align-items:center; flex-wrap:wrap; }
+.label { font-weight:600; color:var(--muted); }
+.btn { padding:8px 12px; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+.timeline { overflow-x:auto; }
+.grid-header { display:flex; border-bottom:1px solid #e5e7eb; }
+.room-col { width:160px; flex-shrink:0; padding:8px; border-right:1px solid #e5e7eb; font-weight:600; }
+.times-row { display:flex; flex:1; }
+.time-cell { min-width:60px; padding:8px; text-align:center; border-right:1px solid #f3f4f6; font-size:12px; color:var(--muted); }
+.row { display:flex; align-items:stretch; border-top:1px solid #f3f4f6; }
+.slot { min-width:60px; border-right:1px solid #f3f4f6; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:12px; }
+.slot.fixed { background:#ef4444; color:white; }
+.slot.event { background:#3b82f6; color:white; }
+
+/* modal */
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; }
+.modal { width:380px; background:white; border-radius:10px; padding:16px; }
+.input, textarea { width:100%; padding:8px; border-radius:6px; border:1px solid #e5e7eb; }
+
+/* legend */
+.legend { display:flex; gap:12px; align-items:center; }
+.legend .sw { width:18px; height:18px; border-radius:4px; }
+
+/* small-screen tweaks */
+@media (max-width: 640px) {
+  .room-col { width: 120px; font-size: 13px; }
+  .time-cell, .slot { min-width: 48px; padding:6px; font-size:11px; }
+  .hero-title { font-size: 22px; }
+}
+
+/* ensure hero doesn't overlap content when sticky nav present */
+body { padding-top: var(--nav-height); }
+@media (max-width:768px){
+  body { padding-top: calc(var(--nav-height)); }
+}
