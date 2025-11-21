@@ -23,7 +23,7 @@ export default function Navbar() {
       <div className="nav-inner">
         <div className="nav-left">
           <a href="#" className="brand" aria-label="FMS P2P Tracker home">
-            <img src="/logo.svg" alt="FMS logo" className="brand-logo" width="36" height="36" />
+            <img src="/logo.png" alt="FMS logo" className="brand-logo" width="36" height="36" />
             <div className="brand-text">
               <div className="brand-sm">FMS</div>
               <div className="brand-title">P2P Tracker</div>
