@@ -1,0 +1,149 @@
+{
+  "source_sheet": "Copy of Sheet1",
+  "times": [
+    "09:00",
+    "09:30",
+    "10:00",
+    "10:30",
+    "11:00",
+    "11:30",
+    "12:00",
+    "12:30",
+    "13:00",
+    "13:30",
+    "14:00",
+    "14:30",
+    "15:00",
+    "15:30",
+    "16:00",
+    "16:30",
+    "17:00",
+    "17:30",
+    "18:00",
+    "18:30",
+    "19:00",
+    "19:30"
+  ],
+  "rooms": [
+    {
+      "room": "Room L1",
+      "slots": {
+        "12:30": "Marketing",
+        "14:00": "Marketing",
+        "09:00": "MIS",
+        "10:30": "MIS",
+        "18:00": "MBA Executive-2",
+        "19:30": "MBA Executive-2",
+        "16:00": "MBA Executive-2"
+      }
+    },
+    {
+      "room": "Room L2",
+      "slots": {
+        "10:30": "Accounts",
+        "12:30": "Economics",
+        "14:00": "Economics",
+        "09:00": "Accounts",
+        "18:00": "MBA Executive-2",
+        "19:30": "MBA Executive-2"
+      }
+    },
+    {
+      "room": "Room 101",
+      "slots": {
+        "09:00": "Global Buss Mgmt",
+        "10:30": "Global Buss Mgmt",
+        "12:30": "Corp Fin",
+        "14:00": "Corp Fin",
+        "16:00": "Financial Analytics",
+        "18:00": "Financial Analytics",
+        "19:30": "MBA HCA-2"
+      }
+    },
+    {
+      "room": "Room 101A",
+      "slots": {
+        "09:00": "Strategic Mgmt",
+        "10:30": "Strategic Mgmt",
+        "18:00": "MBA HCA-2",
+        "19:30": "MBA HCA-2"
+      }
+    },
+    {
+      "room": "Room L102",
+      "slots": {
+        "10:30": "Economics",
+        "12:30": "MIS",
+        "14:00": "MIS",
+        "18:00": "Managing Diversity",
+        "19:30": "MBA Executive-2",
+        "09:00": "Economics",
+        "16:00": "Managing Diversity"
+      }
+    },
+    {
+      "room": "Seminar Hall",
+      "slots": {}
+    },
+    {
+      "room": "Room DK-1",
+      "slots": {}
+    },
+    {
+      "room": "Hall A (201)",
+      "slots": {
+        "09:00": "Global Buss Mgmt",
+        "10:30": "Global Buss Mgmt",
+        "12:30": "Retail Mgmt",
+        "14:00": "Retail Mgmt",
+        "18:00": "MBA Executive-1",
+        "19:30": "MBA Executive-1",
+        "16:00": "MBA Executive-1"
+      }
+    },
+    {
+      "room": "Hall B (202)",
+      "slots": {
+        "09:00": "Legal Envt of Buss",
+        "10:30": "Legal Envt of Buss",
+        "12:30": "Financial Derivatives",
+        "14:00": "Financial Derivatives",
+        "16:00": "Invention Strategies",
+        "18:00": "Invention Strategies"
+      }
+    },
+    {
+      "room": "Room 203",
+      "slots": {
+        "09:00": "Legal Envt of Buss",
+        "10:30": "Legal Envt of Buss",
+        "12:30": "Comp & Rewards Mgmt",
+        "14:00": "Comp & Rewards Mgmt",
+        "16:00": "FRM",
+        "18:00": "MBA Executive-2",
+        "19:30": "MBA Executive-2"
+      }
+    },
+    {
+      "room": "Room 204",
+      "slots": {}
+    },
+    {
+      "room": "Skype Room",
+      "slots": {}
+    },
+    {
+      "room": "Discussion Room",
+      "slots": {}
+    },
+    {
+      "room": "Room DK-2",
+      "slots": {}
+    },
+    {
+      "room": "Room 206",
+      "slots": {}
+    }
+  ],
+  "repeat_weekly": true
+}

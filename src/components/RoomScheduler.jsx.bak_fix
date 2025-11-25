@@ -30,25 +30,7 @@ export default function RoomScheduler(){
   const [localEvents, setLocalEvents] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [timeSlots, setTimeSlots] = useState([]);
-  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('isAdmin') === 'true');
-
-  useEffect(() => {
-    function onStorage(e) {
-      if (e.key === 'isAdmin') {
-        setIsAdmin(localStorage.getItem('isAdmin') === 'true');
-      }
-    }
-    // also check on visibility/focus (in case login occurred in same tab)
-    function refresh() {
-      setIsAdmin(localStorage.getItem('isAdmin') === 'true');
-    }
-    window.addEventListener('storage', onStorage);
-    window.addEventListener('focus', refresh);
-    return () => {
-      window.removeEventListener('storage', onStorage);
-      window.removeEventListener('focus', refresh);
-    };
-  }, []);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [editing, setEditing] = useState(null); // {room, slot, title, fixed}
   const [error, setError] = useState(null);
 

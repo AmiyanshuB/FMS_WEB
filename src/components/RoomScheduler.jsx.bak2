@@ -1,0 +1,135 @@
+// src/components/RoomScheduler.jsx
+import React, { useEffect, useState } from "react";
+
+/**
+ * RoomScheduler
+ * - Loads /data/timetable.json (generated from your XLSX)
+ * - Shows a date picker. When a date is selected, it displays the classes that occur on that weekday.
+ * - The schedule repeats weekly: selecting any date with the same weekday shows the same classes.
+ *
+ * Expected JSON format (produced earlier):
+ * {
+ *   "source_sheet": "...",
+ *   "times": ["Day","Time","Room L1",...],
+ *   "rooms": [
+ *     { "room": "Room L1", "slots": { "09:00-10:00": "Math", "10:00-11:00": "Physics", ... } },
+ *     ...
+ *   ],
+ *   "repeat_weekly": true
+ * }
+ *
+ * The component will try to infer time labels from the keys inside slots.
+ */
+
+function getDayName(date) {
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  return days[date.getDay()];
+}
+
+export default function RoomScheduler() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [timeLabels, setTimeLabels] = useState([]);
+
+  useEffect(() => {
+    fetch("/data/timetable.json")
+      .then(r => {
+        if (!r.ok) throw new Error("Failed to load /data/timetable.json");
+        return r.json();
+      })
+      .then(j => {
+        setData(j);
+        // derive ordered time labels from data.times if possible, else from slots
+        const allKeys = Array.from(new Set(j.rooms.flatMap(r => Object.keys(r.slots))));
+        let labels = [];
+        if (Array.isArray(j.times) && j.times.length > 0) {
+          labels = j.times.filter(t => allKeys.includes(t));
+          const remainder = allKeys.filter(k => !labels.includes(k));
+          labels = labels.concat(remainder);
+        } else {
+          labels = allKeys;
+        }
+        setTimeLabels(labels);
+      })
+      .catch(e => setError(e.message));
+  }, []);
+
+  if (error) return <div style={{color:"red"}}>Error: {error}</div>;
+  if (!data) return <div>Loading timetable...</div>;
+
+  const dayName = getDayName(selectedDate);
+
+  // The uploaded XLSX likely has a 'Day' column; however our JSON has slots per room.
+  // We'll display for the selected weekday by showing entries that match that day.
+  // If your JSON encodes day inside the slot value or as separate rows, adjust accordingly.
+  // Here: we assume each slot value might include info for specific days, or the JSON was created per-day.
+  // We'll simply show the room x time grid; the user wanted "classes on Wednesday should appear when selecting any Wednesday".
+  // So we rely on the original sheet's rows corresponding to days (e.g., one row per timeslot with Day column).
+  // To handle common case: if there's a slot key equal to 'Day' or slot values are structured like "Wed: Math", we try to filter.
+
+  // Helper to render cell content for a room and time label
+  const cellFor = (roomObj, t) => {
+    const raw = roomObj.slots[t];
+    if (raw === undefined || raw === null) return "";
+    // If the value encodes day explicitly like "Wednesday: Subject", show only if day matches
+    if (typeof raw === "string") {
+      // check patterns like "Wednesday: Subject" or "Wed - Subject"
+      const prefix = raw.split(/[:\-]/,1)[0].trim();
+      const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      if (days.includes(prefix)) {
+        if (prefix === dayName) {
+          // return text after separator if present
+          const parts = raw.split(/[:\-]/);
+          return parts.slice(1).join(":").trim() || raw;
+        } else {
+          return "";
+        }
+      }
+    }
+    // Otherwise, assume value is the subject and shown every week on that day/time in the sheet
+    return raw;
+  };
+
+  // If the sheet used a 'Day' column to create separate rows per weekday, you might have entries with keys 'Day' or 'Time'.
+  // We'll render room rows and time columns and allow the user to pick a date: the schedule stays identical for same weekday.
+  return (
+    <div style={{padding:20}}>
+      <h2>Room Scheduler</h2>
+      <div style={{marginBottom:12}}>
+        <label style={{marginRight:8}}>Select date:</label>
+        <input
+          type="date"
+          value={selectedDate.toISOString().slice(0,10)}
+          onChange={e => setSelectedDate(new Date(e.target.value))}
+        />
+        <span style={{marginLeft:12}}>Showing schedule for: <strong>{getDayName(selectedDate)}</strong></span>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse", width:"100%"}}>
+          <thead>
+            <tr>
+              <th style={{position:"sticky", left:0, background:"#fff", zIndex:5, border:"1px solid #ddd", padding:8}}>Room / Time</th>
+              {timeLabels.map((t,i) => <th key={i} style={{border:"1px solid #ddd", padding:8, whiteSpace:"nowrap"}}>{t}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {data.rooms.map((roomObj, rIdx) => (
+              <tr key={rIdx}>
+                <td style={{position:"sticky", left:0, background:"#fafafa", border:"1px solid #ddd", padding:8, fontWeight:600}}>
+                  {roomObj.room}
+                </td>
+                {timeLabels.map((t, cIdx) => (
+                  <td key={cIdx} style={{border:"1px solid #eee", padding:8}}>
+                    {cellFor(roomObj, t)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

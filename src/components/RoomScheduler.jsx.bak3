@@ -1,0 +1,177 @@
+// src/components/RoomScheduler.jsx
+import React, { useEffect, useState } from "react";
+
+/*
+  RoomScheduler
+  - Shows a timetable grid with rooms on Y-axis and 30-minute time slots on X-axis.
+  - Fixed classes (from /data/timetable.json) are shown in red.
+  - Admin events (from /data/events.json) are shown in blue.
+  - The grid repeats weekly: timetable.json provides the repeating pattern by weekday.
+*/
+
+function pad(n){ return n.toString().padStart(2,'0'); }
+function formatTimeLabel(date){ return `${date.getHours()}:${pad(date.getMinutes())}`.replace(/:00$/,''); }
+
+function timeStrToMinutes(t){
+  // Accept "HH:MM:SS" or "HH:MM"
+  if(!t) return null;
+  const parts = t.split(":").map(x=>parseInt(x,10));
+  if(parts.length>=2) return parts[0]*60 + parts[1];
+  return null;
+}
+
+function minutesToTime(min){
+  const h = Math.floor(min/60);
+  const m = min%60;
+  return `${pad(h)}:${pad(m)}:00`;
+}
+
+function getDayName(date){
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  return days[date.getDay()];
+}
+
+export default function RoomScheduler(){
+  const [timetable, setTimetable] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [timeSlots, setTimeSlots] = useState([]);
+  const [error, setError] = useState(null);
+
+  useEffect(()=>{
+    // load fixed timetable
+    fetch("/data/timetable.json").then(r=>{
+      if(!r.ok) throw new Error("Failed to load /data/timetable.json");
+      return r.json();
+    }).then(j=>{
+      setTimetable(j);
+      // derive min and max times from keys in slots (expect keys like "09:00:00" or "09:00")
+      const allTimes = j.rooms.flatMap(r => Object.keys(r.slots).filter(Boolean));
+      const minutes = allTimes.map(timeStrToMinutes).filter(x=>x!==null);
+      if(minutes.length===0){
+        // default 9:00 to 20:00
+        const slots = generateSlots(9*60, 20*60);
+        setTimeSlots(slots);
+      } else {
+        const minm = Math.min(...minutes);
+        const maxm = Math.max(...minutes);
+        // round down min to nearest 30, round up max to nearest 30 and add 30 to include last slot
+        const minRound = Math.floor(minm/30)*30;
+        const maxRound = Math.ceil(maxm/30)*30;
+        const slots = generateSlots(minRound, maxRound+30);
+        setTimeSlots(slots);
+      }
+    }).catch(e=>setError(e.message));
+
+    // load admin events file if exists
+    fetch("/data/events.json").then(r=>{
+      if(!r.ok) {
+        // no events file, ignore
+        return [];
+      }
+      return r.json();
+    }).then(ev=>{
+      if(Array.isArray(ev)) setEvents(ev);
+    }).catch(_=>{/* ignore */});
+  },[]);
+
+  function generateSlots(startMin, endMin){
+    const arr = [];
+    for(let m=startMin; m<endMin; m+=30) arr.push(m);
+    return arr;
+  }
+
+  if(error) return <div style={{color:"red"}}>Error: {error}</div>;
+  if(!timetable) return <div>Loading timetable...</div>;
+
+  const dayName = getDayName(selectedDate);
+
+  // Helper: get fixed class for room at slot minute
+  function fixedFor(roomObj, slotMin){
+    // Room slots keys may be times like "09:00:00" or have Day column entries.
+    // We'll check exact match by converting slotMin to "HH:MM:SS"
+    const key = minutesToTime(slotMin);
+    if(roomObj.slots && roomObj.slots[key]) return roomObj.slots[key];
+    // also try "HH:MM"
+    const key2 = `${Math.floor(slotMin/60)}:${pad(slotMin%60)}`;
+    if(roomObj.slots && roomObj.slots[key2]) return roomObj.slots[key2];
+    return null;
+  }
+
+  // Helper: find events overlapping this slot for this room and weekday
+  function eventsFor(roomName, slotMin){
+    const res = [];
+    for(const ev of events){
+      // expected event format: {room, start:"2025-11-26T09:30", end:"2025-11-26T10:30", title, admin:true}
+      if(ev.room !== roomName) continue;
+      try{
+        const s = new Date(ev.start);
+        const e = new Date(ev.end);
+        // check same weekday (repeat weekly logic: compare weekday only)
+        if(s.getDay() !== selectedDate.getDay()) continue;
+        const sMin = s.getHours()*60 + s.getMinutes();
+        const eMin = e.getHours()*60 + e.getMinutes();
+        // if slot interval [slotMin, slotMin+30) overlaps [sMin,eMin)
+        if(!(slotMin+30 <= sMin || slotMin >= eMin)){
+          res.push(ev);
+        }
+      }catch(err){
+        continue;
+      }
+    }
+    return res;
+  }
+
+  return (
+    <div style={{padding:20}}>
+      <h2>Room / Time Timetable</h2>
+      <div style={{marginBottom:12}}>
+        <label style={{marginRight:8}}>Select date:</label>
+        <input type="date" value={selectedDate.toISOString().slice(0,10)}
+          onChange={e=>setSelectedDate(new Date(e.target.value))} />
+        <span style={{marginLeft:12}}>Showing schedule for: <strong>{dayName}</strong></span>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse", minWidth:800}}>
+          <thead>
+            <tr>
+              <th style={{position:"sticky", left:0, background:"#fff", zIndex:5, border:"1px solid #ddd", padding:8}}>Room / Time</th>
+              {timeSlots.map((m,i)=>(
+                <th key={i} style={{border:"1px solid #ddd", padding:8, whiteSpace:"nowrap", textAlign:"center"}}>{formatTimeLabel(new Date(0,0,0, Math.floor(m/60), m%60))}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {timetable.rooms.map((roomObj, rIdx)=>(
+              <tr key={rIdx}>
+                <td style={{position:"sticky", left:0, background:"#fafafa", border:"1px solid #ddd", padding:8, fontWeight:600}}>{roomObj.room}</td>
+                {timeSlots.map((m, cIdx)=>{
+                  const fixed = fixedFor(roomObj, m);
+                  const evs = eventsFor(roomObj.room, m);
+                  return (
+                    <td key={cIdx} style={{border:"1px solid #eee", padding:6, minWidth:80, height:46}}>
+                      { fixed ? (
+                        <div style={{background:"#ffdddd", color:"#900", padding:"4px 6px", borderRadius:4, height:"100%"}}>
+                          {String(fixed)}
+                        </div>
+                      ) : evs.length>0 ? (
+                        <div style={{background:"#dde8ff", color:"#024", padding:"4px 6px", borderRadius:4}}>
+                          {evs.map((e, idx)=>(<div key={idx}>{e.title}</div>))}
+                        </div>
+                      ) : null }
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{marginTop:12}}>
+        <small><strong>Legend:</strong> <span style={{background:"#ffdddd", padding:"2px 6px", borderRadius:3}}>Fixed class</span> <span style={{marginLeft:8, background:"#dde8ff", padding:"2px 6px", borderRadius:3}}>Admin event</span></small>
+      </div>
+    </div>
+  );
+}

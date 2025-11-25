@@ -15,8 +15,6 @@ export default function Navbar() {
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('userId');
-    try{ delete window.APP_USER; }catch(e){}
-    try{ localStorage.removeItem('isAdmin'); }catch(e){}
     setUser(null);
   };
 
@@ -97,10 +95,6 @@ function LoginModal({ onClose, onLogin }) {
       localStorage.setItem('token', j.token);
       localStorage.setItem('userId', j.userId);
       onLogin({ userId: j.userId });
-      // expose global admin flag for components
-      try{ window.APP_USER = { isAdmin: true, userId: j.userId }; }catch(e){}
-      // set reactive admin flag in localStorage so components update without reload
-      try{ localStorage.setItem('isAdmin','true'); }catch(e){}
     } catch (err) {
       setError('Network error');
       console.error(err);
