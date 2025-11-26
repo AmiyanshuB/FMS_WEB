@@ -1,0 +1,166 @@
+// src/components/RoomScheduler.jsx
+import React, { useEffect, useState, useRef } from "react";
+import io from "socket.io-client";
+
+function pad(n){ return n.toString().padStart(2,'0'); }
+function timeStrToMinutes(t){
+  if(!t) return null;
+  const parts = String(t).split(":").map(x=>parseInt(x,10));
+  if(parts.length>=2) return parts[0]*60 + parts[1];
+  return null;
+}
+function hhmm(min){ const h=Math.floor(min/60), m=min%60; return `${pad(h)}:${pad(m)}`; }
+function formatLocalDate(d){ const y=d.getFullYear(), m=pad(d.getMonth()+1), day=pad(d.getDate()); return `${y}-${m}-${day}`; }
+function getDayName(date){ const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']; return days[date.getDay()]; }
+
+export default function RoomScheduler(){
+  const [schedule, setSchedule] = useState([]); // masterSchedule array
+  const [timetable, setTimetable] = useState(null); // rooms x slots loaded from public/data/timetable.json
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [timeSlots, setTimeSlots] = useState([]);
+  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('isAdmin') === 'true');
+  const socketRef = useRef(null);
+  const [editing, setEditing] = useState(null);
+
+  useEffect(()=>{
+    const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/,'') || '';
+    const socket = io(API || undefined, { autoConnect: true });
+    socketRef.current = socket;
+    socket.on('connect', ()=>console.log('socket connected', socket.id));
+    socket.on('schedule:update', (newSchedule) => {
+      setSchedule(newSchedule || []);
+    });
+    // request schedule
+    socket.emit('request:schedule');
+    return ()=> { socket.disconnect(); };
+  },[]);
+
+  useEffect(()=>{
+    const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/,'') || '';
+    fetch((API || '') + '/api/schedule').then(r=>r.json()).then(data=>setSchedule(data)).catch(err=>console.error(err));
+    fetch('/data/timetable.json').then(r=>r.json()).then(j=>{
+      setTimetable(j);
+      if(Array.isArray(j.times) && j.times.length>0){
+        setTimeSlots(j.times.map(s=>String(s).slice(0,5)));
+      } else {
+        const arr=[]; for(let m=9*60;m<20*60;m+=30) arr.push(hhmm(m)); setTimeSlots(arr);
+      }
+    }).catch(e=>console.error(e));
+  },[]);
+
+  useEffect(()=>{
+    function refresh(){ setIsAdmin(localStorage.getItem('isAdmin') === 'true'); }
+    window.addEventListener('storage', refresh);
+    window.addEventListener('focus', refresh);
+    return ()=>{ window.removeEventListener('storage', refresh); window.removeEventListener('focus', refresh); };
+  },[]);
+
+  if(!timetable) return <div>Loading timetable...</div>;
+
+  const dayName = getDayName(selectedDate);
+  const grid = {};
+  for(const r of timetable.rooms){
+    grid[r.room] = {};
+    for(const ts of timeSlots) grid[r.room][ts] = null;
+    for(const k of Object.keys(r.slots||{})){
+      const t = k.length>=5 ? k.slice(0,5) : k;
+      grid[r.room][t] = { title: r.slots[k], fixed: true };
+    }
+  }
+  for(const it of schedule || []){
+    if(it.day !== dayName) continue;
+    const room = it.room;
+    const sMin = timeStrToMinutes(it.startTime);
+    const eMin = timeStrToMinutes(it.endTime);
+    if(!(room in grid)) continue;
+    for(const ts of timeSlots){
+      const tmin = timeStrToMinutes(ts);
+      if(tmin === null) continue;
+      if(!(tmin+30 <= sMin || tmin >= eMin)){
+        grid[room][ts] = { title: it.className || it.class || 'Class', fixed: true };
+      }
+    }
+  }
+
+  async function postSlotUpdate(day, room, startTime, endTime, className){
+    const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/,'') || '';
+    const token = localStorage.getItem('token') || '';
+    const res = await fetch((API || '') + '/api/schedule/slot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ day, room, startTime, endTime, className })
+    });
+    if(!res.ok){
+      const j = await res.json().catch(()=>({message:'error'}));
+      throw new Error(j.error || j.message || 'update failed');
+    }
+    return res.json();
+  }
+
+  function openEditor(room, slot){
+    if(!isAdmin) return;
+    const existing = grid[room] && grid[room][slot];
+    setEditing({ room, slot, title: existing ? existing.title : '' });
+  }
+  async function saveEdit(){
+    if(!editing) return;
+    const day = dayName;
+    const room = editing.room;
+    const startTime = editing.slot;
+    const smin = timeStrToMinutes(startTime);
+    const endTime = hhmm(smin + 30);
+    try{
+      await postSlotUpdate(day, room, startTime, endTime, editing.title);
+      setEditing(null);
+      // wait for server push to update UI (socket)
+    }catch(err){
+      alert('Save failed: '+err.message);
+    }
+  }
+
+  return (
+    <div style={{padding:20}}>
+      <h2>Timetable</h2>
+      <div style={{marginBottom:12}}>
+        <label>Select date: </label>
+        <input type="date" value={formatLocalDate(selectedDate)} onChange={e=>setSelectedDate(new Date(e.target.value + 'T00:00'))} />
+        <button onClick={()=>setSelectedDate(new Date())}>Today</button>
+        <span style={{marginLeft:12}}>Showing: <strong>{dayName}</strong></span>
+      </div>
+
+      <div style={{overflowX:'auto'}}>
+        <table style={{borderCollapse:'collapse', minWidth:800}}>
+          <thead>
+            <tr>
+              <th style={{position:'sticky', left:0, background:'#fff', zIndex:5, border:'1px solid #ddd', padding:8}}>Room / Time</th>
+              {timeSlots.map((t,i)=>(<th key={i} style={{border:'1px solid #ddd', padding:8, textAlign:'center'}}>{t}</th>))}
+            </tr>
+          </thead>
+          <tbody>
+            {Object.keys(grid).map((room, rIdx)=>(
+              <tr key={rIdx}>
+                <td style={{position:'sticky', left:0, background:'#fafafa', border:'1px solid #ddd', padding:8, fontWeight:600}}>{room}</td>
+                {timeSlots.map((t,cIdx)=>{
+                  const cell = grid[room][t];
+                  return (
+                    <td key={cIdx} onClick={()=>openEditor(room,t)} style={{border:'1px solid #eee', padding:6, minWidth:80, height:46, cursor:isAdmin?'pointer':'default', verticalAlign:'top'}}>
+                      { cell ? (
+                        <div style={{background: cell.fixed ? '#ffdddd' : '#dde8ff', color: cell.fixed ? '#900' : '#024', padding:'4px 6px', borderRadius:4}}>{cell.title}</div>
+                      ) : null }
+                      { editing && editing.room===room && editing.slot===t && (
+                        <div style={{marginTop:6}}>
+                          <input value={editing.title} onChange={e=>setEditing({...editing, title:e.target.value})} />
+                          <div style={{marginTop:6}}><button onClick={saveEdit}>Save</button> <button onClick={()=>setEditing(null)}>Cancel</button></div>
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

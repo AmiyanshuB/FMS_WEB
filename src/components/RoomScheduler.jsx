@@ -1,323 +1,510 @@
 // src/components/RoomScheduler.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from 'react';
+import { format, addMinutes, parseISO } from 'date-fns';
+import { connectSocket } from '../lib/socket';
 
-/*
-  Full rewrite: supports inline cell editing for admin users.
-*/
+// Helpers
+const pad = (n) => n.toString().padStart(2, '0');
 
-function pad(n){ return n.toString().padStart(2,'0'); }
-function hhmm(min){ const h=Math.floor(min/60), m=min%60; return `${pad(h)}:${pad(m)}`; }
-function timeStrToMinutes(t){
-  if(!t) return null;
-  if(typeof t === "number") return t;
-  const parts = String(t).split(":").map(x=>parseInt(x,10));
-  if(parts.length>=2 && !isNaN(parts[0]) && !isNaN(parts[1])) return parts[0]*60 + parts[1];
-  return null;
-}
-function getDayName(date){
-  const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  return days[date.getDay()];
-}
-function formatLocalDate(d){
-  const y=d.getFullYear(), m=pad(d.getMonth()+1), day=pad(d.getDate());
-  return `${y}-${m}-${day}`;
-}
+const minutesToHHMM = (mins) => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${pad(h)}:${pad(m)}`;
+};
 
-export default function RoomScheduler(){
-  useEffect(()=>{ const t = localStorage.getItem('token'); const uid = localStorage.getItem('userId'); setIsAdmin(!!(t && uid)); },[]);
-  const [timetable, setTimetable] = useState(null);
-  const [fileEvents, setFileEvents] = useState([]);
-  const [localEvents, setLocalEvents] = useState([]);
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [timeSlots, setTimeSlots] = useState([]);
-  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('isAdmin') === 'true');
+const hhmmToMinutes = (str) => {
+  if (!str) return 0;
+  const [h, m] = String(str).split(':').map((v) => parseInt(v, 10) || 0);
+  return h * 60 + m;
+};
 
+const formatDateKey = (date) => format(date, 'yyyy-MM-dd');
+
+const getDayName = (date) => format(date, 'EEEE');
+
+// Time range for the grid (8 AM to 6 PM, every 30 minutes)
+const GRID_START_MINUTES = 8 * 60;
+const GRID_END_MINUTES = 18 * 60;
+const SLOT_STEP = 30;
+
+const buildTimeSlots = () => {
+  const slots = [];
+  for (let t = GRID_START_MINUTES; t < GRID_END_MINUTES; t += SLOT_STEP) {
+    slots.push(minutesToHHMM(t));
+  }
+  return slots;
+};
+
+const TIME_SLOTS = buildTimeSlots();
+
+const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL)
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : '';
+
+export default function RoomScheduler() {
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [schedule, setSchedule] = useState([]); // weekly fixed
+  const [events, setEvents] = useState([]);     // all events, filter client-side
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  const [editing, setEditing] = useState(null);
+  // editing = { room, startTime, endTime, title, type: 'fixed' | 'event', eventId? }
+
+  //--- detect admin via token in localStorage ---
   useEffect(() => {
-    function onStorage(e) {
-      if (e.key === 'isAdmin') {
-        setIsAdmin(localStorage.getItem('isAdmin') === 'true');
-      }
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null;
+    setIsAdmin(!!token);
+    const handler = () => {
+      const t = window.localStorage.getItem('token');
+      setIsAdmin(!!t);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handler);
     }
-    // also check on visibility/focus (in case login occurred in same tab)
-    function refresh() {
-      setIsAdmin(localStorage.getItem('isAdmin') === 'true');
-    }
-    window.addEventListener('storage', onStorage);
-    window.addEventListener('focus', refresh);
     return () => {
-      window.removeEventListener('storage', onStorage);
-      window.removeEventListener('focus', refresh);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('storage', handler);
+      }
     };
   }, []);
-  const [editing, setEditing] = useState(null); // {room, slot, title, fixed}
-  const [error, setError] = useState(null);
 
-  useEffect(()=>{
-    // auto-update today's date every 30s only if user hasn't manually changed it recently
-    const tick = setInterval(()=> {
-      // if user selected today's date already or hasn't changed for a long time, update to current date
-      setSelectedDate(new Date());
-    }, 30000);
-    return ()=> clearInterval(tick);
-  },[]);
+  //--- Socket.io live sync ---
+  useEffect(() => {
+    const socket = connectSocket(API_BASE);
 
-  useEffect(()=>{
-    // load timetable
-    fetch("/data/timetable.json").then(r=>{
-      if(!r.ok) throw new Error("Failed to load timetable.json");
-      return r.json();
-    }).then(j=>{
-      setTimetable(j);
-      if(Array.isArray(j.times) && j.times.length>0){
-        setTimeSlots(j.times.map(s => {
-          const p = String(s).split(":");
-          const hh = parseInt(p[0]||0,10), mm = parseInt(p[1]||0,10);
-          return `${pad(hh)}:${pad(mm)}`;
-        }));
-      } else {
-        const arr=[];
-        for(let m=9*60;m<20*60;m+=30) arr.push(hhmm(m));
-        setTimeSlots(arr);
+    const onScheduleUpdate = (incoming) => {
+      if (Array.isArray(incoming)) setSchedule(incoming);
+    };
+    const onEventsUpdate = (incoming) => {
+      if (Array.isArray(incoming)) setEvents(incoming);
+    };
+
+    socket.on('schedule:update', onScheduleUpdate);
+    socket.on('events:update', onEventsUpdate);
+
+    // Ask server to send latest (useful if we connected late)
+    socket.emit('request:schedule');
+    socket.emit('request:events');
+
+    return () => {
+      socket.off('schedule:update', onScheduleUpdate);
+      socket.off('events:update', onEventsUpdate);
+    };
+  }, []);
+
+  //--- Initial fetch via REST (helps even if sockets misbehave) ---
+  useEffect(() => {
+    const fetchInitial = async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const base = API_BASE || '';
+        const [schRes, evRes] = await Promise.all([
+          fetch(`${base}/api/schedule`),
+          fetch(`${base}/api/events`)
+        ]);
+        if (!schRes.ok) throw new Error('Failed to load weekly schedule');
+        if (!evRes.ok) throw new Error('Failed to load events');
+        const schJson = await schRes.json();
+        const evJson = await evRes.json();
+        setSchedule(Array.isArray(schJson) ? schJson : []);
+        setEvents(Array.isArray(evJson) ? evJson : []);
+      } catch (e) {
+        console.error(e);
+        setError(e.message || 'Failed to load timetable');
+      } finally {
+        setLoading(false);
       }
-    }).catch(e=>setError(e.message));
-
-    // load events.json (optional)
-    fetch("/data/events.json").then(r=>{
-      if(!r.ok) return [];
-      return r.json();
-    }).then(ev=>{
-      if(Array.isArray(ev)){
-        const norm = ev.map(x=>({...x, fixed: x.fixed===undefined ? true : !!x.fixed}));
-        setFileEvents(norm);
-      }
-    }).catch(()=>{});
-
-    // load local events
-    try{
-      const raw = localStorage.getItem("custom_events_v1");
-      if(raw) setLocalEvents(JSON.parse(raw));
-    }catch(e){}
-  },[]);
-
-  function persistLocalEvents(arr){
-    try{
-      localStorage.setItem("custom_events_v1", JSON.stringify(arr));
-      setLocalEvents(arr);
-    }catch(e){
-      console.error("save fail", e);
-    }
-  }
-
-  if(error) return <div style={{color:"red"}}>Error: {error}</div>;
-  if(!timetable) return <div>Loading...</div>;
+    };
+    fetchInitial();
+  }, []);
 
   const dayName = getDayName(selectedDate);
-  const allEvents = [...(fileEvents||[]), ...(localEvents||[])];
+  const dateKey = formatDateKey(selectedDate);
 
-  // Helpers to determine if a fixed class exists for room and slot
-  function fixedFor(roomObj, slot){
-    // check timetable.json slots first
-    if(roomObj.slots && roomObj.slots[slot]) return {title: roomObj.slots[slot], fixed:true};
-    // check events (fileEvents + local) that are fixed and match weekday and overlap slot
-    for(const ev of allEvents){
-      const evFixed = ev.fixed===undefined ? true : !!ev.fixed;
-      if(!evFixed) continue;
-      if(String(ev.room) !== String(roomObj.room)) continue;
-      // compute event start/end minutes (support 'HH:MM' or full ISO datetime)
-      let sMin=null,eMin=null;
-      if(typeof ev.start==='string' && ev.start.includes("T")){
-        try{ const d=new Date(ev.start); if(d.getDay() !== selectedDate.getDay()) continue; sMin = d.getHours()*60 + d.getMinutes(); }catch(e){ }
-      } else { sMin = timeStrToMinutes(ev.start); }
-      if(typeof ev.end==='string' && ev.end.includes("T")){
-        try{ const d=new Date(ev.end); eMin = d.getHours()*60 + d.getMinutes(); }catch(e){}
-      } else { eMin = timeStrToMinutes(ev.end); }
-      if(sMin===null || eMin===null) continue;
-      const slotMin = timeStrToMinutes(slot);
-      if(slotMin===null) continue;
-      if(!(slotMin+30 <= sMin || slotMin >= eMin)){
-        return {title: ev.title || "Event", fixed:true};
+  // Filter events for selected date
+  const eventsForDay = useMemo(
+    () => events.filter((ev) => ev.date === dateKey),
+    [events, dateKey]
+  );
+
+  // Build list of rooms from both schedule + events
+  const rooms = useMemo(() => {
+    const sRooms = schedule.map((s) => s.room).filter(Boolean);
+    const eRooms = eventsForDay.map((e) => e.room).filter(Boolean);
+    return Array.from(new Set([...sRooms, ...eRooms])).sort();
+  }, [schedule, eventsForDay]);
+
+  // Build grid: rooms x timeslots
+  const grid = useMemo(() => {
+    const result = {};
+    for (const room of rooms) {
+      result[room] = {};
+    }
+
+    // weekly fixed classes -> red
+    for (const item of schedule) {
+      if (!item || item.day !== dayName) continue;
+      const room = item.room;
+      if (!result[room]) result[room] = {};
+      const sMin = hhmmToMinutes(item.startTime);
+      const eMin = hhmmToMinutes(item.endTime);
+      for (let t = sMin; t < eMin; t += SLOT_STEP) {
+        const key = minutesToHHMM(t);
+        if (!TIME_SLOTS.includes(key)) continue;
+        result[room][key] = {
+          label: item.className || item.class || 'Class',
+          type: 'fixed',
+          startTime: item.startTime,
+          endTime: item.endTime,
+          source: item
+        };
       }
     }
-    return null;
-  }
 
-  function eventsFor(roomName, slot){
-    const res=[];
-    for(const ev of allEvents){
-      const evFixed = ev.fixed===undefined ? true : !!ev.fixed;
-      if(evFixed) continue; // fixed ones shown via fixedFor
-      if(String(ev.room)!==String(roomName)) continue;
-      let sMin=null,eMin=null;
-      if(typeof ev.start==='string' && ev.start.includes("T")){
-        try{ const d=new Date(ev.start); if(d.getDay() !== selectedDate.getDay()) continue; sMin = d.getHours()*60 + d.getMinutes(); }catch(e){ }
-      } else { sMin = timeStrToMinutes(ev.start); }
-      if(typeof ev.end==='string' && ev.end.includes("T")){
-        try{ const d=new Date(ev.end); eMin = d.getHours()*60 + d.getMinutes(); }catch(e){} 
-      } else { eMin = timeStrToMinutes(ev.end); }
-      if(sMin===null || eMin===null) continue;
-      const slotMin = timeStrToMinutes(slot);
-      if(slotMin===null) continue;
-      if(!(slotMin+30 <= sMin || slotMin >= eMin)){
-        res.push(ev);
+    // date-specific events -> blue
+    for (const ev of eventsForDay) {
+      const room = ev.room;
+      if (!result[room]) result[room] = {};
+      const sMin = hhmmToMinutes(ev.startTime);
+      const eMin = hhmmToMinutes(ev.endTime);
+      for (let t = sMin; t < eMin; t += SLOT_STEP) {
+        const key = minutesToHHMM(t);
+        if (!TIME_SLOTS.includes(key)) continue;
+        result[room][key] = {
+          label: ev.eventName || 'Event',
+          type: 'event',
+          startTime: ev.startTime,
+          endTime: ev.endTime,
+          eventId: ev.id,
+          source: ev
+        };
       }
     }
-    return res;
-  }
 
-  // Inline editor handlers
-  function openEditor(room, slot){
-    if(!isAdmin) return; // only admins can open the editor
+    return result;
+  }, [rooms, schedule, eventsForDay, dayName]);
 
-    // find existing local event overlapping this slot
-    const slotMin = timeStrToMinutes(slot);
-    const match = (localEvents||[]).find(ev=>{
-      if(String(ev.room)!==String(room)) return false;
-      let sMin=null,eMin=null;
-      if(typeof ev.start==='string' && ev.start.includes("T")){
-        try{ const d=new Date(ev.start); if(d.getDay() !== selectedDate.getDay()) return false; sMin = d.getHours()*60 + d.getMinutes(); }catch(e){ }
-      } else { sMin = timeStrToMinutes(ev.start); }
-      if(typeof ev.end==='string' && ev.end.includes("T")){ try{ const d=new Date(ev.end); eMin = d.getHours()*60 + d.getMinutes(); }catch(e){} } else { eMin = timeStrToMinutes(ev.end); }
-      if(sMin===null || eMin===null) return false;
-      if(slotMin===null) return false;
-      return !(slotMin+30 <= sMin || slotMin >= eMin);
-    });
-    if(match){
-      setEditing({room, slot, title: match.title || "", fixed: !!match.fixed});
+  // --- Editing helpers ---
+
+  const openEditor = (room, slot) => {
+    if (!isAdmin) return;
+    const row = grid[room] || {};
+    const cell = row[slot];
+
+    if (cell) {
+      // Editing an existing block
+      setEditing({
+        room,
+        startTime: cell.startTime || slot,
+        endTime: cell.endTime || minutesToHHMM(hhmmToMinutes(slot) + SLOT_STEP),
+        title: cell.label || '',
+        type: cell.type, // 'fixed' | 'event'
+        eventId: cell.eventId || null
+      });
     } else {
-      // if a fixed class exists, prefill title and fixed=true to allow override
-      const ff = fixedFor({room}, slot);
-      if(ff){
-        setEditing({room, slot, title: ff.title || "", fixed:true});
-      } else {
-        setEditing({room, slot, title:"", fixed:true});
-      }
+      // Creating a new one in this slot
+      const startTime = slot;
+      const endTime = minutesToHHMM(hhmmToMinutes(slot) + SLOT_STEP);
+      setEditing({
+        room,
+        startTime,
+        endTime,
+        title: '',
+        type: 'fixed',
+        eventId: null
+      });
     }
-  }
+  };
 
-  function saveEditing(){
-    if(!editing) return;
-    const sMin = timeStrToMinutes(editing.slot);
-    const eMin = sMin + 30;
-    const datePart = formatLocalDate(selectedDate);
-    const ev = {
-      room: editing.room,
-      start: `${datePart}T${editing.slot}:00`,
-      end: `${datePart}T${hhmm(eMin)}:00`,
-      title: editing.title || "",
-      fixed: !!editing.fixed
-    };
-    // Remove overlapping local events for same room & slot
-    const next = (localEvents||[]).filter(existing=>{
-      if(String(existing.room)!==String(ev.room)) return true;
-      // compute existing minutes
-      let sMinEx=null,eMinEx=null;
-      if(typeof existing.start==='string' && existing.start.includes("T")){
-        try{ const d=new Date(existing.start); if(d.getDay() !== selectedDate.getDay()) return true; sMinEx = d.getHours()*60 + d.getMinutes(); }catch(e){ }
-      } else { sMinEx = timeStrToMinutes(existing.start); }
-      if(typeof existing.end==='string' && existing.end.includes("T")){ try{ const d=new Date(existing.end); eMinEx = d.getHours()*60 + d.getMinutes(); }catch(e){} } else { eMinEx = timeStrToMinutes(existing.end); }
-      if(sMinEx===null || eMinEx===null) return true;
-      if(!( (sMinEx >= eMin) || (eMinEx <= sMin) )) return false; // overlap -> remove
-      return true;
-    });
-    const merged = [...next, ev];
-    persistLocalEvents(merged);
-    setEditing(null);
-  }
+  const closeEditor = () => setEditing(null);
 
-  function deleteEditing(){
-    if(!editing) return;
-    const slotMin = timeStrToMinutes(editing.slot);
-    const sMin = slotMin; const eMin = sMin+30;
-    const filtered = (localEvents||[]).filter(existing=>{
-      if(String(existing.room)!==String(editing.room)) return true;
-      let sMinEx=null,eMinEx=null;
-      if(typeof existing.start==='string' && existing.start.includes("T")){
-        try{ const d=new Date(existing.start); if(d.getDay() !== selectedDate.getDay()) return true; sMinEx = d.getHours()*60 + d.getMinutes(); }catch(e){ }
-      } else { sMinEx = timeStrToMinutes(existing.start); }
-      if(typeof existing.end==='string' && existing.end.includes("T")){ try{ const d=new Date(existing.end); eMinEx = d.getHours()*60 + d.getMinutes(); }catch(e){} } else { eMinEx = timeStrToMinutes(existing.end); }
-      if(sMinEx===null || eMinEx===null) return true;
-      if(!( (sMinEx >= eMin) || (eMinEx <= sMin) )) return false; // overlap -> remove
-      return true;
+  // Update editing fields
+  const updateEditingField = (field, value) => {
+    setEditing((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  // --- API helpers for mutations ---
+
+  const getAuthHeaders = () => {
+    const token =
+      (typeof window !== 'undefined' && window.localStorage.getItem('token')) || '';
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const saveWeeklySlot = async (day, room, startTime, endTime, className) => {
+    const base = API_BASE || '';
+    const res = await fetch(`${base}/api/schedule/slot`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({ day, room, startTime, endTime, className })
     });
-    persistLocalEvents(filtered);
-    setEditing(null);
-  }
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || j.message || 'Failed to update schedule');
+    }
+    const j = await res.json().catch(() => ({}));
+    if (Array.isArray(j.schedule)) {
+      setSchedule(j.schedule);
+    }
+  };
+
+  const saveEvent = async (payload) => {
+    const base = API_BASE || '';
+    const res = await fetch(`${base}/api/events`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || j.message || 'Failed to update events');
+    }
+    const j = await res.json().catch(() => ({}));
+    if (Array.isArray(j.events)) {
+      setEvents(j.events);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!editing) return;
+    try {
+      setError('');
+      const { room, startTime, endTime, title, type, eventId } = editing;
+      const trimmedTitle = (title || '').trim();
+      if (!trimmedTitle) {
+        throw new Error('Please enter a title');
+      }
+
+      if (type === 'fixed') {
+        await saveWeeklySlot(dayName, room, startTime, endTime, trimmedTitle);
+      } else {
+        if (eventId) {
+          await saveEvent({
+            action: 'update',
+            id: eventId,
+            date: dateKey,
+            room,
+            startTime,
+            endTime,
+            eventName: trimmedTitle
+          });
+        } else {
+          await saveEvent({
+            action: 'create',
+            date: dateKey,
+            room,
+            startTime,
+            endTime,
+            eventName: trimmedTitle
+          });
+        }
+      }
+      setEditing(null);
+    } catch (e) {
+      console.error(e);
+      setError(e.message || 'Save failed');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!editing) return;
+    try {
+      setError('');
+      const { room, startTime, endTime, type, eventId } = editing;
+
+      if (type === 'fixed') {
+        // Delete fixed class by sending empty className; backend treats as delete for overlapping block
+        await saveWeeklySlot(dayName, room, startTime, endTime, '');
+      } else if (eventId) {
+        await saveEvent({ action: 'delete', id: eventId });
+      }
+      setEditing(null);
+    } catch (e) {
+      console.error(e);
+      setError(e.message || 'Delete failed');
+    }
+  };
+
+  // --- Render ---
+
+  const onDateChange = (e) => {
+    const value = e.target.value;
+    if (!value) return;
+    // parse using parseISO to keep it simple
+    const d = parseISO(value);
+    if (!isNaN(d.getTime())) {
+      setSelectedDate(d);
+    }
+  };
 
   return (
-    <div style={{padding:20}}>
-      <h2>Room / Time Timetable</h2>
-      <div style={{marginBottom:12, display:"flex", gap:12, alignItems:"center"}}>
-        <div>
-          <label style={{marginRight:8}}>Select date:</label>
-          <input type="date" value={formatLocalDate(selectedDate)}
-            onChange={e=>setSelectedDate(new Date(e.target.value + "T00:00"))} />
-          <button style={{marginLeft:8}} onClick={()=>setSelectedDate(new Date())}>Today</button>
+    <div className="scheduler-root">
+      <div className="toolbar" aria-label="Timetable controls">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div className="label">Select Date:</div>
+          <input
+            type="date"
+            value={format(selectedDate, 'yyyy-MM-dd')}
+            onChange={onDateChange}
+            className="input"
+          />
+          <div style={{ marginLeft: 8, color: '#374151', fontWeight: 500 }}>
+            {dayName}
+          </div>
         </div>
-        <div>Showing schedule for: <strong>{getDayName(selectedDate)}</strong></div>
-        <div style={{marginLeft:"auto"}}>
-          <div style={{fontSize:14, color:isAdmin ? "#2a7" : "#666"}}>{isAdmin ? "Admin: ON" : "Admin: OFF"}</div>
+
+        <div style={{ marginLeft: 'auto' }} className="legend">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="sw" style={{ background: '#ef4444' }}></div>
+            <div style={{ fontSize: 13 }}>Fixed Classes</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="sw" style={{ background: '#3b82f6' }}></div>
+            <div style={{ fontSize: 13 }}>Events</div>
+          </div>
+          {isAdmin && (
+            <div style={{ fontSize: 12, color: '#059669', marginLeft: 12 }}>
+              Admin mode: click any slot to edit
+            </div>
+          )}
         </div>
       </div>
 
-      <div style={{overflowX:"auto"}}>
-        <table style={{borderCollapse:"collapse", minWidth:800}}>
-          <thead>
-            <tr>
-              <th style={{position:"sticky", left:0, background:"#fff", zIndex:5, border:"1px solid #ddd", padding:8}}>Room / Time</th>
-              {timeSlots.map((t,i)=>(
-                <th key={i} style={{border:"1px solid #ddd", padding:8, whiteSpace:"nowrap", textAlign:"center"}}>{t}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {timetable.rooms.map((roomObj, rIdx)=>(
-              <tr key={rIdx}>
-                <td style={{position:"sticky", left:0, background:"#fafafa", border:"1px solid #ddd", padding:8, fontWeight:600}}>{roomObj.room}</td>
-                {timeSlots.map((t, cIdx)=>{
-                  const fixed = fixedFor(roomObj, t);
-                  const evs = eventsFor(roomObj.room, t);
-                  const isEditing = editing && editing.room===roomObj.room && editing.slot===t;
-                  return (
-                    <td key={cIdx} onClick={()=>{ if(isAdmin && !editing) openEditor(roomObj.room, t); }} style={{cursor: isAdmin ? "pointer" : "default", border:"1px solid #eee", padding:6, minWidth:80, height:46, verticalAlign:"top", position:"relative"}}>
-                      { fixed ? (
-                        <div style={{background:"#ffdddd", color:"#900", padding:"4px 6px", borderRadius:4, height:"100%"}}>
-                          {String(fixed.title || fixed)}
-                        </div>
-                      ) : evs.length>0 ? (
-                        <div style={{background:"#dde8ff", color:"#024", padding:"4px 6px", borderRadius:4}}>
-                          {evs.map((e, idx)=>(<div key={idx}>{e.title}</div>))}
-                        </div>
-                      ) : null }
+      {loading && (
+        <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280' }}>Loading timetable…</div>
+      )}
+      {error && (
+        <div style={{ marginTop: 8, fontSize: 13, color: 'crimson' }}>{error}</div>
+      )}
 
-                      
+      <div className="card timeline" aria-label="Room timetable grid">
+        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+          Schedule for {format(selectedDate, 'MMMM d, yyyy')}
+        </h2>
 
-                      { isAdmin && isEditing && (
-                        <div style={{position:"absolute", left:6, top:6, zIndex:40, background:"#fff", border:"1px solid #ccc", padding:8, borderRadius:6, minWidth:180, boxShadow:"0 2px 8px rgba(0,0,0,0.12)"}}>
-                          <div style={{marginBottom:6, fontSize:13, fontWeight:600}}>{roomObj.room} — {t}</div>
-                          <div style={{marginBottom:6}}>
-                            <input placeholder="Title" value={editing.title} onChange={e=>setEditing({...editing, title:e.target.value})} style={{width:"100%"}} />
-                          </div>
-                          <div style={{marginBottom:6}}>
-                            <label><input type="checkbox" checked={!!editing.fixed} onChange={e=>setEditing({...editing, fixed:e.target.checked})} /> Fixed</label>
-                          </div>
-                          <div style={{display:"flex", gap:8}}>
-                            <button onClick={saveEditing}>Save</button>
-                            <button onClick={deleteEditing} style={{background:"#f8d7da"}}>Delete</button>
-                            <button onClick={()=>setEditing(null)}>Close</button>
-                          </div>
-                        </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
+        <div className="grid-header">
+          <div className="room-col">Room / Time</div>
+          <div className="times-row">
+            {TIME_SLOTS.map((slot) => (
+              <div key={slot} className="time-cell">
+                {slot}
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </div>
 
-      <div style={{marginTop:12}}>
-        <small><strong>Legend:</strong> <span style={{background:"#ffdddd", padding:"2px 6px", borderRadius:3}}>Fixed class</span> <span style={{marginLeft:8, background:"#dde8ff", padding:"2px 6px", borderRadius:3}}>Admin event</span></small>
+        {/* rows */}
+        {rooms.length === 0 && (
+          <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>
+            No rooms for this day yet. {isAdmin ? 'Click a slot to start adding classes or events.' : ''}
+          </div>
+        )}
+
+        {rooms.map((room) => (
+          <div key={room} className="row">
+            <div className="room-col">{room}</div>
+            <div className="times-row">
+              {TIME_SLOTS.map((slot) => {
+                const cell = (grid[room] && grid[room][slot]) || null;
+                const isEditing =
+                  editing && editing.room === room && editing.startTime === slot;
+
+                let className = 'slot';
+                if (cell) {
+                  className += cell.type === 'fixed' ? ' fixed' : ' event';
+                }
+
+                return (
+                  <div
+                    key={slot}
+                    className={className}
+                    onClick={() => openEditor(room, slot)}
+                  >
+                    {/* Display block title */}
+                    {cell && !isEditing && <span>{cell.label}</span>}
+
+                    {/* Inline editor */}
+                    {isEditing && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+                        <input
+                          className="input"
+                          style={{ fontSize: 11, padding: 4 }}
+                          value={editing.title}
+                          onChange={(e) => updateEditingField('title', e.target.value)}
+                          placeholder="Class / event name"
+                        />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="radio"
+                              checked={editing.type === 'fixed'}
+                              onChange={() => updateEditingField('type', 'fixed')}
+                            />
+                            Weekly (red)
+                          </label>
+                          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="radio"
+                              checked={editing.type === 'event'}
+                              onChange={() => updateEditingField('type', 'event')}
+                            />
+                            Date-specific (blue)
+                          </label>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          {cell && (
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ fontSize: 11 }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete();
+                              }}
+                            >
+                              Delete
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ fontSize: 11 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              closeEditor();
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ fontSize: 11 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSave();
+                            }}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

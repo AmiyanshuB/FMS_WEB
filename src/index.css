@@ -91,3 +91,51 @@ body { padding-top: var(--nav-height); }
 @media (max-width:768px){
   body { padding-top: calc(var(--nav-height)); }
 }
+/* ABOUT SECTION */
+.about-section {
+  background: #f9fafb;
+  padding: 48px 16px 64px;
+}
+
+.about-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.about-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #111827;
+}
+
+.about-underline {
+  display: inline-block;
+  width: 80px;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 999px;
+  margin-bottom: 24px;
+}
+
+.about-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #4b5563;
+  margin: 4px 0;
+}
+
+/* FOOTER BAR */
+.site-footer {
+  background: var(--maroon-end); /* your existing deep red */
+  color: #f9fafb;
+  padding: 10px 16px;
+  text-align: center;
+}
+
+.site-footer-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  font-size: 13px;
+}
