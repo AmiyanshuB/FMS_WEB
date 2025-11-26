@@ -1,6 +1,6 @@
 // src/components/RoomScheduler.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { format, addMinutes, parseISO } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { connectSocket } from '../lib/socket';
 
 // Helpers
@@ -19,12 +19,11 @@ const hhmmToMinutes = (str) => {
 };
 
 const formatDateKey = (date) => format(date, 'yyyy-MM-dd');
-
 const getDayName = (date) => format(date, 'EEEE');
 
-// Time range for the grid (8 AM to 6 PM, every 30 minutes)
+// Time range for the grid (8 AM to 8 PM, every 30 minutes)
 const GRID_START_MINUTES = 8 * 60;
-const GRID_END_MINUTES = 18 * 60;
+const GRID_END_MINUTES = 20 * 60;
 const SLOT_STEP = 30;
 
 const buildTimeSlots = () => {
@@ -37,36 +36,53 @@ const buildTimeSlots = () => {
 
 const TIME_SLOTS = buildTimeSlots();
 
-const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL)
-  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
-  : '';
+const API_BASE =
+  (typeof import.meta !== 'undefined' &&
+    import.meta.env &&
+    import.meta.env.VITE_API_URL &&
+    import.meta.env.VITE_API_URL.replace(/\/$/, '')) ||
+  '';
 
 export default function RoomScheduler() {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [schedule, setSchedule] = useState([]); // weekly fixed
-  const [events, setEvents] = useState([]);     // all events, filter client-side
+  const [events, setEvents] = useState([]); // all events, filter client-side
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isOffline, setIsOffline] = useState(
+    typeof navigator !== 'undefined' ? !navigator.onLine : false
+  );
+  const [toast, setToast] = useState(null); // { type: 'success' | 'error', message }
 
   const [editing, setEditing] = useState(null);
   // editing = { room, startTime, endTime, title, type: 'fixed' | 'event', eventId? }
 
-  //--- detect admin via token in localStorage ---
+  // --- detect admin via token in localStorage ---
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null;
+    if (typeof window === 'undefined') return;
+
+    const token = window.localStorage.getItem('token');
     setIsAdmin(!!token);
-    const handler = () => {
+
+    const authHandler = () => {
       const t = window.localStorage.getItem('token');
       setIsAdmin(!!t);
     };
-    if (typeof window !== 'undefined') {
-      window.addEventListener('storage', handler);
-    }
+
+    window.addEventListener('storage', authHandler);
+    window.addEventListener('auth-change', authHandler);
+
+    const onlineHandler = () => setIsOffline(false);
+    const offlineHandler = () => setIsOffline(true);
+    window.addEventListener('online', onlineHandler);
+    window.addEventListener('offline', offlineHandler);
+
     return () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('storage', handler);
-      }
+      window.removeEventListener('storage', authHandler);
+      window.removeEventListener('auth-change', authHandler);
+      window.removeEventListener('online', onlineHandler);
+      window.removeEventListener('offline', offlineHandler);
     };
   }, []);
 
@@ -81,8 +97,13 @@ export default function RoomScheduler() {
       if (Array.isArray(incoming)) setEvents(incoming);
     };
 
+    const onConnect = () => setIsOffline(false);
+    const onDisconnect = () => setIsOffline(true);
+
     socket.on('schedule:update', onScheduleUpdate);
     socket.on('events:update', onEventsUpdate);
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
 
     // Ask server to send latest (useful if we connected late)
     socket.emit('request:schedule');
@@ -91,6 +112,8 @@ export default function RoomScheduler() {
     return () => {
       socket.off('schedule:update', onScheduleUpdate);
       socket.off('events:update', onEventsUpdate);
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
     };
   }, []);
 
@@ -199,7 +222,8 @@ export default function RoomScheduler() {
       setEditing({
         room,
         startTime: cell.startTime || slot,
-        endTime: cell.endTime || minutesToHHMM(hhmmToMinutes(slot) + SLOT_STEP),
+        endTime:
+          cell.endTime || minutesToHHMM(hhmmToMinutes(slot) + SLOT_STEP),
         title: cell.label || '',
         type: cell.type, // 'fixed' | 'event'
         eventId: cell.eventId || null
@@ -226,11 +250,16 @@ export default function RoomScheduler() {
     setEditing((prev) => (prev ? { ...prev, [field]: value } : prev));
   };
 
+  const showToast = (type, message) => {
+    setToast({ type, message });
+    window.setTimeout(() => setToast(null), 2200);
+  };
+
   // --- API helpers for mutations ---
 
   const getAuthHeaders = () => {
-    const token =
-      (typeof window !== 'undefined' && window.localStorage.getItem('token')) || '';
+    if (typeof window === 'undefined') return {};
+    const token = window.localStorage.getItem('token') || '';
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
@@ -309,14 +338,19 @@ export default function RoomScheduler() {
         }
       }
       setEditing(null);
+      showToast('success', 'Timetable updated');
     } catch (e) {
       console.error(e);
       setError(e.message || 'Save failed');
+      showToast('error', e.message || 'Save failed');
     }
   };
 
   const handleDelete = async () => {
     if (!editing) return;
+    const confirmed = window.confirm('Delete this entry?');
+    if (!confirmed) return;
+
     try {
       setError('');
       const { room, startTime, endTime, type, eventId } = editing;
@@ -328,66 +362,100 @@ export default function RoomScheduler() {
         await saveEvent({ action: 'delete', id: eventId });
       }
       setEditing(null);
+      showToast('success', 'Entry deleted');
     } catch (e) {
       console.error(e);
       setError(e.message || 'Delete failed');
+      showToast('error', e.message || 'Delete failed');
     }
   };
 
-  // --- Render ---
+  // --- Handlers ---
 
   const onDateChange = (e) => {
     const value = e.target.value;
     if (!value) return;
-    // parse using parseISO to keep it simple
     const d = parseISO(value);
     if (!isNaN(d.getTime())) {
       setSelectedDate(d);
     }
   };
 
+  const goToToday = () => {
+    setSelectedDate(new Date());
+  };
+
   return (
     <div className="scheduler-root">
+      {/* Offline / sync banner */}
+      {isOffline && (
+        <div className="offline-banner" role="status">
+          You are offline. Changes will retry when connection is restored.
+        </div>
+      )}
+
+      {/* Toolbar */}
       <div className="toolbar" aria-label="Timetable controls">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className="label">Select Date:</div>
+        <div className="toolbar-left">
+          <label className="label" htmlFor="date-picker">
+            Date
+          </label>
           <input
+            id="date-picker"
             type="date"
             value={format(selectedDate, 'yyyy-MM-dd')}
             onChange={onDateChange}
-            className="input"
+            className="input input--date"
           />
-          <div style={{ marginLeft: 8, color: '#374151', fontWeight: 500 }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline"
+            onClick={goToToday}
+          >
+            Today
+          </button>
+          <div className="toolbar-day-label" aria-live="polite">
             {dayName}
           </div>
         </div>
 
-        <div style={{ marginLeft: 'auto' }} className="legend">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="sw" style={{ background: '#ef4444' }}></div>
-            <div style={{ fontSize: 13 }}>Fixed Classes</div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="sw" style={{ background: '#3b82f6' }}></div>
-            <div style={{ fontSize: 13 }}>Events</div>
+        <div className="toolbar-right">
+          <div className="legend" aria-hidden="true">
+            <div className="legend-item">
+              <div className="sw sw-fixed" />
+              <span>Fixed class</span>
+            </div>
+            <div className="legend-item">
+              <div className="sw sw-event" />
+              <span>Event</span>
+            </div>
           </div>
           {isAdmin && (
-            <div style={{ fontSize: 12, color: '#059669', marginLeft: 12 }}>
-              Admin mode: click any slot to edit
+            <div className="admin-chip" aria-label="Admin editing enabled">
+              Admin mode
             </div>
           )}
         </div>
       </div>
 
       {loading && (
-        <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280' }}>Loading timetable…</div>
+        <div className="text-muted text-sm" style={{ marginTop: 8 }}>
+          Loading timetable…
+        </div>
       )}
       {error && (
-        <div style={{ marginTop: 8, fontSize: 13, color: 'crimson' }}>{error}</div>
+        <div className="text-error text-sm" style={{ marginTop: 8 }}>
+          {error}
+        </div>
       )}
 
-      <div className="card timeline" aria-label="Room timetable grid">
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+      {/* Timetable grid */}
+      <div
+        className="card timeline"
+        aria-label="Room timetable grid"
+        role="grid"
+      >
+        <h2 className="section-title">
           Schedule for {format(selectedDate, 'MMMM d, yyyy')}
         </h2>
 
@@ -402,110 +470,203 @@ export default function RoomScheduler() {
           </div>
         </div>
 
-        {/* rows */}
         {rooms.length === 0 && (
-          <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>
-            No rooms for this day yet. {isAdmin ? 'Click a slot to start adding classes or events.' : ''}
+          <div className="empty-state">
+            No rooms for this day yet.{' '}
+            {isAdmin
+              ? 'Tap a time slot to start adding classes or events.'
+              : ''}
           </div>
         )}
 
         {rooms.map((room) => (
-          <div key={room} className="row">
-            <div className="room-col">{room}</div>
+          <div key={room} className="row" role="row">
+            <div className="room-col" role="rowheader">
+              {room}
+            </div>
             <div className="times-row">
               {TIME_SLOTS.map((slot) => {
                 const cell = (grid[room] && grid[room][slot]) || null;
                 const isEditing =
-                  editing && editing.room === room && editing.startTime === slot;
+                  editing &&
+                  editing.room === room &&
+                  editing.startTime === slot;
 
                 let className = 'slot';
                 if (cell) {
                   className += cell.type === 'fixed' ? ' fixed' : ' event';
                 }
+                if (isEditing) {
+                  className += ' slot--selected';
+                }
+
+                const labelParts = [];
+                labelParts.push(`Room ${room}`);
+                labelParts.push(`at ${slot}`);
+                if (cell && cell.label) {
+                  labelParts.push(cell.label);
+                }
 
                 return (
-                  <div
+                  <button
                     key={slot}
+                    type="button"
                     className={className}
                     onClick={() => openEditor(room, slot)}
+                    disabled={!isAdmin}
+                    aria-label={labelParts.join(', ')}
                   >
-                    {/* Display block title */}
-                    {cell && !isEditing && <span>{cell.label}</span>}
-
-                    {/* Inline editor */}
-                    {isEditing && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-                        <input
-                          className="input"
-                          style={{ fontSize: 11, padding: 4 }}
-                          value={editing.title}
-                          onChange={(e) => updateEditingField('title', e.target.value)}
-                          placeholder="Class / event name"
-                        />
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <input
-                              type="radio"
-                              checked={editing.type === 'fixed'}
-                              onChange={() => updateEditingField('type', 'fixed')}
-                            />
-                            Weekly (red)
-                          </label>
-                          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <input
-                              type="radio"
-                              checked={editing.type === 'event'}
-                              onChange={() => updateEditingField('type', 'event')}
-                            />
-                            Date-specific (blue)
-                          </label>
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                          {cell && (
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ fontSize: 11 }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDelete();
-                              }}
-                            >
-                              Delete
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ fontSize: 11 }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              closeEditor();
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ fontSize: 11 }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSave();
-                            }}
-                          >
-                            Save
-                          </button>
-                        </div>
-                      </div>
+                    {cell && (
+                      <span className="slot-label" title={cell.label}>
+                        {cell.label}
+                      </span>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
         ))}
       </div>
+
+      {/* Bottom sheet editor */}
+      {editing && (
+        <div
+          className="bottom-sheet-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-sheet-title"
+          onClick={closeEditor}
+        >
+          <div
+            className="bottom-sheet open"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bottom-sheet-handle" />
+
+            <div className="bottom-sheet-header">
+              <div>
+                <h3 id="edit-sheet-title" className="bottom-sheet-title">
+                  {editing.eventId || editing.type === 'event'
+                    ? 'Edit event'
+                    : 'Edit class'}
+                </h3>
+                <p className="bottom-sheet-subtitle">
+                  {editing.room} • {dayName}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-icon"
+                onClick={closeEditor}
+                aria-label="Close editor"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="bottom-sheet-body">
+              <label className="field-label">
+                Title
+                <input
+                  className="input"
+                  value={editing.title}
+                  onChange={(e) =>
+                    updateEditingField('title', e.target.value)
+                  }
+                  placeholder="Class or event name"
+                />
+              </label>
+
+              <div className="field-row">
+                <label className="field-label">
+                  Start time
+                  <input
+                    type="time"
+                    className="input"
+                    value={editing.startTime}
+                    onChange={(e) =>
+                      updateEditingField('startTime', e.target.value)
+                    }
+                  />
+                </label>
+                <label className="field-label">
+                  End time
+                  <input
+                    type="time"
+                    className="input"
+                    value={editing.endTime}
+                    onChange={(e) =>
+                      updateEditingField('endTime', e.target.value)
+                    }
+                  />
+                </label>
+              </div>
+
+              <fieldset className="field-group">
+                <legend className="field-label">Type</legend>
+                <div className="radio-row">
+                  <label className="radio-label">
+                    <input
+                      type="radio"
+                      checked={editing.type === 'fixed'}
+                      onChange={() => updateEditingField('type', 'fixed')}
+                    />
+                    <span>Apply to master (weekly)</span>
+                  </label>
+                  <label className="radio-label">
+                    <input
+                      type="radio"
+                      checked={editing.type === 'event'}
+                      onChange={() => updateEditingField('type', 'event')}
+                    />
+                    <span>Date-specific event only</span>
+                  </label>
+                </div>
+              </fieldset>
+            </div>
+
+            <div className="bottom-sheet-actions">
+              {editing.eventId || editing.title ? (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={handleDelete}
+                >
+                  Delete
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={closeEditor}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSave}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          className={
+            'toast ' + (toast.type === 'error' ? 'toast-error' : 'toast-ok')
+          }
+          role="status"
+          aria-live="polite"
+        >
+          {toast.message}
+        </div>
+      )}
     </div>
   );
 }

@@ -16,6 +16,9 @@ export default function Navbar() {
     localStorage.removeItem('token');
     localStorage.removeItem('userId');
     setUser(null);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('auth-change'));
+    }
   };
 
   return (
@@ -95,6 +98,9 @@ function LoginModal({ onClose, onLogin }) {
       localStorage.setItem('token', j.token);
       localStorage.setItem('userId', j.userId);
       onLogin({ userId: j.userId });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('auth-change'));
+      }
     } catch (err) {
       setError('Network error');
       console.error(err);
